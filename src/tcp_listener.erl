@@ -22,6 +22,7 @@
           listener,       % Listening socket
           acceptor,       % Asynchronous acceptor's internal reference
           module,         % FSM handling module
+          schedulers,
           module_args     % Arguments when starting a FSM handler
          }).
 
@@ -42,11 +43,13 @@ init([Port, Module, Args]) ->
     process_flag(trap_exit, true),
     Opts = [binary, {packet, 2}, {reuseaddr, true},
             {keepalive, true}, {backlog, 30}, {active, false}],
+            SN = erlang:system_info(schedulers),
     case gen_tcp:listen(Port, Opts) of
         {ok, Listen_socket} ->
             {ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
             {ok, #state{listener     = Listen_socket,
                         acceptor     = Ref,
+                        schedulers   =  {SN,SN},
                         module       = Module,
                         module_args  = Args}};
         {error, Reason} ->
@@ -61,7 +64,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({inet_async, ListSock, Ref, {ok, CliSocket}},
-            #state{listener=ListSock, acceptor=Ref, module=Module,
+            #state{listener=ListSock, acceptor=Ref,schedulers={AccSN,SN}, module=Module,
                    module_args = Args} 
             = State) ->
     try
@@ -71,7 +74,8 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}},
         end,
 
         %% New client connected - spawn a new process with args
-        {ok, Pid} = Module:start_link(Args),
+        Options=[{spawn_opt,[{scheduler, AccSN}]}],
+        {ok, Pid} = Module:start_link({Args,Options}),
         gen_tcp:controlling_process(CliSocket, Pid),
 
         %% Instruct the new FSM that it owns the socket.
@@ -80,7 +84,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}},
         %% Signal the network driver that we are ready to accept 
         %% another connection
         case prim_inet:async_accept(ListSock, -1) of
-            {ok,    NewRef} -> ok, {noreply, State#state{acceptor=NewRef}};
+            {ok,    NewRef} -> ok, {noreply, State#state{schedulers={seqReturn(AccSN-1,SN),SN},acceptor=NewRef}};
             {error, NewRef} -> exit({async_accept, inet:format_error(NewRef)})
         end
     catch exit:Why ->
@@ -118,3 +122,9 @@ set_sockopt(ListSock, CliSocket) ->
         Error ->
             gen_tcp:close(CliSocket), Error
     end.
+
+
+seqReturn(0, SN)->
+SN;
+seqReturn(Accsn, _SN)->
+Accsn.

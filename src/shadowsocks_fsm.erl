@@ -49,8 +49,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Args) ->
-    gen_fsm:start_link(?MODULE, Args, []).
+start_link({Args,Options}) ->
+    gen_fsm:start_link(?MODULE, Args, Options).
 
 set_socket(Pid, Socket) when is_pid(Pid), is_port(Socket) ->
     gen_fsm:send_event(Pid, {socket_ready, Socket}).
